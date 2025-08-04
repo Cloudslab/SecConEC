@@ -79,5 +79,8 @@ See [Configs](docs/Configs.md) to understand how to modify configs. Includes,
 ![](images/HighLevelAbstractDiagram.png)
 
 # References
+
 * **Q. Deng, M. Goudarzi, and R. Buyya, “[FogBus2: a lightweight and distributed container-based framework for integration of IoTenabled systems with edge and cloud computing](https://www.researchgate.net/profile/Mohammad_Goudarzi10/publication/352364687_FogBus2_A_Lightweight_and_Distributed_Container-based_Framework_for_Integration_of_IoT-enabled_Systems_with_Edge_and_Cloud_Computing/links/60c6012492851ca6f8e68383/FogBus2-A-Lightweight-and-Distributed-Container-based-Framework-for-Integration-of-IoT-enabled-Systems-with-Edge-and-Cloud-Computing.pdf),” in Proceedings of the International Workshop on Big Data in Emergent Distributed Environments, 2021, pp. 1–8.**
 * Goudarzi, Mohammad, Qifan Deng, and Rajkumar Buyya. "[Resource management in edge and fog computing using FogBus2 framework.](https://arxiv.org/pdf/2108.00591.pdf)" arXiv preprint arXiv:2108.00591 (2021).
+* **Z. Wang, M. Goudarzi, M. Gong, *et al.*, “[Deep reinforcement learning-based scheduling for optimizing system load and response time in edge and fog computing environments](https://www.sciencedirect.com/science/article/pii/S0167739X23003862),” *Future Generation Computer Systems*, vol. 152, 2024, pp. 55–69.**
+
