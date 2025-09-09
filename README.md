@@ -1,5 +1,3 @@
-# This is a draft of the README file for the project.
-
 ## Usage
 1. Clone the repository.
 2. Build component images using the provided Dockerfiles. `./containers/COMPONENT_NAME/Dockerfile` E.g.,
