@@ -22,23 +22,31 @@ class Actor:
             self,
             addr,
             masterAddr,
-            remoteLoggerAddr,
             logLevel=logging.DEBUG,
-            containerName=''):
+            containerName='',
+            enableTLS: bool = False,
+            certFile: str = '',
+            keyFile: str = '',
+            domainName: str = '',
+            enableOverlay: bool = False):
         self.basicComponent = BasicComponent(
             ignoreSocketError=True,
             role=ComponentRole.ACTOR,
             addr=addr,
             logLevel=logLevel,
             masterAddr=masterAddr,
-            remoteLoggerAddr=remoteLoggerAddr,
-            portRange=ConfigActor.portRange)
+            portRange=ConfigActor.portRange,
+            enableTLS=enableTLS,
+            certFile=certFile,
+            keyFile=keyFile,
+            domainName=domainName)
         self.resourcesDiscovery = ResourcesDiscovery(
             basicComponent=self.basicComponent)
         self.discoverIfUnset()
         self.containerManager = ContainerManager(
             basicComponent=self.basicComponent,
-            containerName=containerName)
+            containerName=containerName,
+            enableOverlay=enableOverlay)
         self.profiler = ActorProfiler(
             basicComponent=self.basicComponent,
             dockerClient=self.containerManager.dockerClient)
@@ -61,11 +69,6 @@ class Actor:
         self.currPath = os.path.abspath(os.path.curdir)
 
     def discoverIfUnset(self):
-        remoteLogger = self.basicComponent.remoteLogger
-        if remoteLogger.addr[0] == '' or remoteLogger.addr[1] == 0:
-            self.resourcesDiscovery.discoverAndCommunicate(
-                targetRole=ComponentRole.REMOTE_LOGGER,
-                isNotSetInArgs=True)
         master = self.basicComponent.master
         if master.addr[0] == '' or master.addr[1] == 0:
             self.resourcesDiscovery.discoverAndCommunicate(
@@ -90,7 +93,7 @@ class Actor:
             messageType=MessageType.LOG,
             messageSubType=MessageSubType.HOST_RESOURCES,
             data=data,
-            destination=self.basicComponent.remoteLogger)
+            destination=self.basicComponent.master)
 
     def uploadImages(self):
 
@@ -102,12 +105,13 @@ class Actor:
             messageType=MessageType.LOG,
             messageSubType=MessageSubType.CONTAINER_IMAGES_AND_RUNNING_CONTAINERS,
             data=data,
-            destination=self.basicComponent.remoteLogger)
+            destination=self.basicComponent.master)
 
     def register(self):
         self.basicComponent.debugLogger.info('Profiling...')
         self.profiler.profileAll()
-        data = {'actorResources': self.profiler.resources.toDict()}
+        data = {'actorResources': self.profiler.resources.toDict(),
+                'domainName': self.basicComponent.domainName}
         self.basicComponent.debugLogger.info('Registering...')
         try:
             self.basicComponent.sendMessage(
@@ -150,18 +154,6 @@ def parseArg():
         type=int,
         help='Master port')
     parser.add_argument(
-        '--remoteLoggerIP',
-        metavar='RemoteLoggerIP',
-        type=str,
-        help='Remote logger ip.')
-    parser.add_argument(
-        '--remoteLoggerPort',
-        metavar='RemoteLoggerPort',
-        nargs='?',
-        default=0,
-        type=int,
-        help='Remote logger port')
-    parser.add_argument(
         '--containerName',
         metavar='ContainerName',
         nargs='?',
@@ -175,6 +167,41 @@ def parseArg():
         default=10,
         type=int,
         help='Reference python logging level, from 0 to 50 integer to show log')
+    parser.add_argument(
+        '--enableTLS',
+        metavar='EnableTLS',
+        nargs='?',
+        default='',
+        type=bool,
+        help='enable TLS or not')
+    parser.add_argument(
+        '--certFile',
+        metavar='CertFile',
+        nargs='?',
+        default='',
+        type=str,
+        help='Cert file: openssl req -new -x509 -days 365 -nodes -out server.crt -keyout server.key -subj "/C=US/ST=State/L=City/O=Organization/OU=Department/CN=example.com" ')
+    parser.add_argument(
+        '--keyFile',
+        metavar='keyFile',
+        nargs='?',
+        default='',
+        type=str,
+        help='Key file: openssl req -new -x509 -days 365 -nodes -out server.crt -keyout server.key -subj "/C=US/ST=State/L=City/O=Organization/OU=Department/CN=example.com"')
+    parser.add_argument(
+        '--domainName',
+        metavar='domainName',
+        nargs='?',
+        default='fogbus2',
+        type=str,
+        help='Domain Name')
+    parser.add_argument(
+        '--enableOverlay',
+        metavar='enableOverlay',
+        nargs='?',
+        default=False,
+        type=bool,
+        help='Enable docker overlay or not')
 
     return parser.parse_args()
 
@@ -184,7 +211,11 @@ if __name__ == '__main__':
     actor_ = Actor(
         addr=(args.bindIP, args.bindPort),
         masterAddr=(args.masterIP, args.masterPort),
-        remoteLoggerAddr=(args.remoteLoggerIP, args.remoteLoggerPort),
         containerName=args.containerName,
-        logLevel=args.verbose)
+        logLevel=args.verbose,
+        enableTLS=args.enableTLS,
+        certFile=args.certFile,
+        keyFile=args.keyFile,
+        domainName=args.domainName,
+        enableOverlay=args.enableOverlay)
     actor_.run()

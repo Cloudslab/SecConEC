@@ -1,11 +1,8 @@
 from queue import Queue
-from threading import Event
-from time import sleep
-from time import time
 from typing import Any
 from typing import Callable
 from typing import Tuple
-
+from time import sleep, time
 import cv2
 
 from ...component.basic import BasicComponent
@@ -16,17 +13,12 @@ class WindowManager:
             self,
             basicComponent: BasicComponent,
             frameQueue: Queue[Tuple[str, Any]],
-            prepareWindows: Callable,
-            canStart: Event,
-            pressSpaceToStart=False,
-            interval: float = 1 / 60):
+            prepareWindows: Callable):
         self.basicComponent = basicComponent
-        self.interval = interval
-        self.pressSpaceToStart = pressSpaceToStart
         self.prepareWindows = prepareWindows
         self.frameQueue = frameQueue
         self.prepareWindows()
-        self.canStart: Event = canStart
+        self.interval = 1 / 60
 
     def run(self):
         lastUpdatedTime = time()
@@ -38,17 +30,6 @@ class WindowManager:
                 sleep(self.interval - timeDiff)
             lastUpdatedTime = currentTime
             cv2.imshow(windowName, frame)
-            if not self.pressSpaceToStart:
-                cv2.waitKey(10)
-                continue
-            while True:
-                k = cv2.waitKey(32)
-                if k != 32:
-                    sleep(.1)
-                    continue
-                self.basicComponent.debugLogger.debug(k)
-
-                self.pressSpaceToStart = False
-                self.canStart.set()
+            if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
             continue

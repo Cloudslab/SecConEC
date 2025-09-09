@@ -36,7 +36,8 @@ class ActorMessageHandler:
         self._runningIperfClient = Lock()
         self._runningIperfServer = Lock()
 
-    def handleMessage(self, message: MessageReceived):
+    def handleMessage(self,
+                      message: MessageReceived):
         if message.typeIs(
                 messageType=MessageType.PLACEMENT,
                 messageSubType=MessageSubType.RUN_TASK_EXECUTOR):
@@ -78,7 +79,8 @@ class ActorMessageHandler:
             self.resourcesDiscovery.handleMessage(message=message)
             return
 
-    def handleRegistered(self, message: MessageReceived):
+    def handleRegistered(self,
+                         message: MessageReceived):
         source = message.source
         self.basicComponent.master = source
         data = message.data
@@ -95,9 +97,22 @@ class ActorMessageHandler:
             setIsRegistered=True)
         self.containerManager.tryRenamingContainerName(
             newName=self.basicComponent.nameLogPrinting)
+        if self.containerManager.isContainerMode and self.containerManager.enableOverlay:
+            try:
+                self.basicComponent.debugLogger.info(
+                    'Joining swarm at %s', source.addr[0])
+                self.containerManager.dockerClient.swarm.join(
+                    remote_addrs=[f'source.addr[0]:2377'],
+                    join_token=data['swarmJoinToken'])
+            except Exception as e:
+                self.basicComponent.debugLogger.error(
+                    'Ignoring error: cannot join swarm at %s: %s',
+                    source.addr[0],
+                    str(e))
         self.basicComponent.debugLogger.info("Registered, running...")
 
-    def handleInitTaskExecutor(self, message: MessageReceived):
+    def handleInitTaskExecutor(self,
+                               message: MessageReceived):
         data = message.data
         if self.profiler.resources.cpu.utilization > .8:
             return
@@ -109,13 +124,19 @@ class ActorMessageHandler:
         taskName = data['taskName']
         taskToken = data['taskToken']
         childTaskTokens = data['childrenTaskTokens']
+        networkName = data['networkName'] if self.containerManager.enableOverlay else None
+        signedAttributes = data['signedAttributes']
+        signature = data['signature']
         self.initiator.initTaskExecutor(
             userID=userID,
             userName=userName,
             taskName=taskName,
             taskToken=taskToken,
             childTaskTokens=childTaskTokens,
-            isContainerMode=self.containerManager.isContainerMode)
+            isContainerMode=self.containerManager.isContainerMode,
+            networkName=networkName,
+            signedAttributes=signedAttributes,
+            signature=signature)
 
     def canInitComponent(
             self,
@@ -133,22 +154,22 @@ class ActorMessageHandler:
             return False
         return True
 
-    def handleInitMaster(self, message: MessageReceived):
+    def handleInitMaster(self,
+                         message: MessageReceived):
         self.basicComponent.debugLogger.debug('Received init master msg')
         if not self.canInitComponent():
             self.basicComponent.debugLogger.info(
                 'Cannot create another actor for %s' % str(message.source.addr))
             return
-        source = message.source
         self.initiator.initMaster(
             me=self.basicComponent.me,
-            remoteLogger=self.basicComponent.remoteLogger,
-            createdBy=source,
+            createdBy=message.source,
             message=message,
             isContainerMode=self.containerManager.isContainerMode)
         return
 
-    def handleAdvertise(self, message: MessageReceived):
+    def handleAdvertise(self,
+                        message: MessageReceived):
         if not self.canInitComponent():
             self.basicComponent.debugLogger.info(
                 'Ignore advertisement from %s' % str(message.source.addr))
@@ -156,12 +177,12 @@ class ActorMessageHandler:
         source = message.source
         self.initiator.initActor(
             me=self.basicComponent.me,
-            remoteLogger=self.basicComponent.remoteLogger,
             master=source,
             isContainerMode=self.containerManager.isContainerMode)
         return
 
-    def handleDataRateTestReceive(self, message: MessageReceived):
+    def handleDataRateTestReceive(self,
+                                  message: MessageReceived):
         data = message.data
         sourceAddr = data['sourceAddr']
         sourceHostID = data['sourceHostID']
@@ -184,13 +205,14 @@ class ActorMessageHandler:
             sourceHostID: str):
         self._runningIperfServer.acquire()
         server = NetProfServer()
-        server.bind_address = self.basicComponent.addr[0]
+        server.bind_address = '0.0.0.0'
         server.port = 60000
         while True:
             try:
                 self.basicComponent.debugLogger.debug('Run iperf server')
                 dataRateResult = server.run()
                 if 'error' in dataRateResult.json:
+                    self.basicComponent.debugLogger.warning(dataRateResult)
                     sleep(1)
                     continue
                 data = {
@@ -214,12 +236,13 @@ class ActorMessageHandler:
                 continue
         self._runningIperfServer.release()
 
-    def handleDataRateTestSend(self, message: MessageReceived):
+    def handleDataRateTestSend(self,
+                               message: MessageReceived):
         self._runningIperfClient.acquire()
         data = message.data
         source = message.source
         client = NetProfClient()
-        client.bind_address = self.basicComponent.addr[0]
+        client.bind_address = '0.0.0.0'
         client.server_hostname = source.addr[0]
         client.port = 60000
         client.duration = 2
@@ -231,6 +254,7 @@ class ActorMessageHandler:
                 sleep(3)
                 res = client.run()
                 if 'error' in res.json:
+                    self.basicComponent.debugLogger.warning(res)
                     sleep(1)
                     continue
                 break

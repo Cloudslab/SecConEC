@@ -20,6 +20,7 @@ from utils.master import MasterMessageHandler
 from utils.master import MasterProfiler
 from utils.master import MasterResourcesDiscovery
 from utils.master import Registry
+from utils.master.networkController.networks import NetworkController
 
 
 class Master:
@@ -39,7 +40,12 @@ class Master:
             logLevel=logging.DEBUG,
             containerName: str = '',
             parsedArgs=None,
-            waitTimeout: int = 0):
+            waitTimeout: int = 0,
+            enableTLS: bool = False,
+            certFile: str = '',
+            keyFile: str = '',
+            domainName: str = '',
+            enableOverlay: bool = False):
         self.parsedArgs = parsedArgs
 
         self.basicComponent = BasicComponent(
@@ -49,12 +55,17 @@ class Master:
             remoteLoggerAddr=remoteLoggerAddr,
             logLevel=logLevel,
             ignoreSocketError=True,
-            portRange=ConfigMaster.portRange)
+            portRange=ConfigMaster.portRange,
+            enableTLS=enableTLS,
+            certFile=certFile,
+            keyFile=keyFile,
+            domainName=domainName)
 
         self.loggerManager = LoggerManager(basicComponent=self.basicComponent)
         self.containerManager = ContainerManager(
             basicComponent=self.basicComponent,
-            containerName=containerName)
+            containerName=containerName,
+            enableOverlay=enableOverlay)
         self.applicationManager = ApplicationManager(
             databaseType=databaseType
         )
@@ -76,13 +87,21 @@ class Master:
             self.basicComponent.debugLogger.error(
                 'Scheduler name is invalid: %s', schedulerName)
             terminate()
+        if self.containerManager.isContainerMode and self.containerManager.enableOverlay:
+            docker_client = self.containerManager.dockerClient
+            self.networkController = NetworkController(docker_client)
+        else:
+            self.networkController = None
         self.registry = Registry(
             basicComponent=self.basicComponent,
             applicationManager=self.applicationManager,
             scheduler=self.scheduler,
             systemPerformance=self.loggerManager.systemPerformance,
             profiler=self.profiler,
-            waitTimeout=waitTimeout)
+            waitTimeout=waitTimeout,
+            networkController=self.networkController,
+            container_name=self.containerManager.containerName,
+            enableOverlay=self.containerManager.enableOverlay)
         self.resourcesDiscovery = MasterResourcesDiscovery(
             registry=self.registry,
             basicComponent=self.basicComponent,
@@ -127,7 +146,7 @@ class Master:
             self.profiler.dataRateTestEvent.set()
         else:
             self.basicComponent.debugLogger.debug(
-                'Waiting for %s actors',self.profiler.minHosts)
+                'Waiting for %s actors', self.profiler.minHosts)
             while len(self.registry.registeredManager.actors) < \
                     self.profiler.minHosts:
                 sleep(1)
@@ -144,14 +163,14 @@ class Master:
              self.parsedArgs.profileDataRatePeriod),
             (self.uploadLatency, 30),
             (self.updateResources, 30),
-            (self.profiler.loggerManager.saveAll, 1800),
-            (self.profiler.loggerManager.retrieveAll, 1900),
-            (self.uploadProfiles, 2000),
-            (self.requestProfiler, 2100),
+            (self.profiler.loggerManager.saveAll, 60),
+            (self.profiler.loggerManager.retrieveAll, 60),
+            (self.uploadProfiles, 60),
+            (self.requestProfiler, 300),
             # (self.resourcesDiscovery.discoverMasters, 3600 * 3),
             # (self.resourcesDiscovery.discoverActors, 3600 * 3),
             # (self.resourcesDiscovery.getActorAddrFromOtherMasters, 3200),
-            (self.resourcesDiscovery.advertiseMeToActors, 3300)]
+            (self.resourcesDiscovery.advertiseMeToActors, 12 * 3600)]
         return periodicTasks
 
     def uploadDataRate(self):
@@ -198,8 +217,8 @@ def parseArg():
     parser = argparse.ArgumentParser(
         description='Master')
     parser.add_argument(
-        '--bindIP',
-        metavar='BindIP',
+        '--advertiseIP',
+        metavar='advertiseIP',
         type=str,
         help='Master ip.')
     parser.add_argument(
@@ -275,7 +294,7 @@ def parseArg():
         '--profileDataRatePeriod',
         metavar='ProfileDataRatePeriod',
         nargs='?',
-        default=24 * 3600,
+        default=5 * 60,
         type=int,
         help='Period for Master to profile data rate and latency. In seconds. '
              'Set to 0 to disable')
@@ -293,6 +312,41 @@ def parseArg():
         default='',
         type=str,
         help='container name')
+    parser.add_argument(
+        '--enableTLS',
+        metavar='EnableTLS',
+        nargs='?',
+        default=False,
+        type=bool,
+        help='enable TLS or not')
+    parser.add_argument(
+        '--certFile',
+        metavar='CertFile',
+        nargs='?',
+        default='',
+        type=str,
+        help='Cert file: openssl req -new -x509 -days 365 -nodes -out server.crt -keyout server.key -subj "/C=US/ST=State/L=City/O=Organization/OU=Department/CN=example.com" ')
+    parser.add_argument(
+        '--keyFile',
+        metavar='keyFile',
+        nargs='?',
+        default='',
+        type=str,
+        help='Key file: openssl req -new -x509 -days 365 -nodes -out server.crt -keyout server.key -subj "/C=US/ST=State/L=City/O=Organization/OU=Department/CN=example.com"')
+    parser.add_argument(
+        '--domainName',
+        metavar='domainName',
+        nargs='?',
+        default='fogbus2',
+        type=str,
+        help='Domain Name')
+    parser.add_argument(
+        '--enableOverlay',
+        metavar='enableOverlay',
+        nargs='?',
+        default=False,
+        type=bool,
+        help='Enable docker overlay or not')
 
     return parser.parse_args()
 
@@ -301,8 +355,8 @@ if __name__ == '__main__':
     args_ = parseArg()
     master_ = Master(
         containerName=args_.containerName,
-        addr=(args_.bindIP, args_.bindPort),
-        masterAddr=(args_.bindIP, args_.bindPort),
+        addr=(args_.advertiseIP, args_.bindPort),
+        masterAddr=(args_.advertiseIP, args_.bindPort),
         remoteLoggerAddr=(args_.remoteLoggerIP, args_.remoteLoggerPort),
         schedulerName=args_.schedulerName,
         createdByIP=args_.createdByIP,
@@ -310,5 +364,10 @@ if __name__ == '__main__':
         minActors=args_.minimumActors,
         databaseType=args_.databaseType,
         parsedArgs=args_,
-        logLevel=args_.verbose)
+        logLevel=args_.verbose,
+        enableTLS=args_.enableTLS,
+        certFile=args_.certFile,
+        keyFile=args_.keyFile,
+        domainName=args_.domainName,
+        enableOverlay=args_.enableOverlay)
     master_.run()

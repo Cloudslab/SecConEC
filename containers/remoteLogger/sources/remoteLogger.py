@@ -18,7 +18,11 @@ class RemoteLogger:
             self,
             addr: Address,
             logLevel=DEBUG,
-            containerName: str = ''):
+            containerName: str = '',
+            enableTLS: bool = False,
+            certFile: str = '',
+            keyFile: str = '',
+            domainName: str = ''):
         self.basicComponent = BasicComponent(
             role=ComponentRole.REMOTE_LOGGER,
             addr=addr,
@@ -26,7 +30,11 @@ class RemoteLogger:
             masterAddr=('0.0.0.0', 0),
             remoteLoggerAddr=addr,
             ignoreSocketError=True,
-            portRange=ConfigRemoteLogger.portRange)
+            portRange=ConfigRemoteLogger.portRange,
+            enableTLS=enableTLS,
+            certFile=certFile,
+            keyFile=keyFile,
+            domainName=domainName)
         self.basicComponent.remoteLogger = self.basicComponent.me
         self.loggerManager = LoggerManager(
             basicComponent=self.basicComponent)
@@ -89,6 +97,35 @@ def parseArg():
         default='',
         type=str,
         help='container name')
+    parser.add_argument(
+        '--enableTLS',
+        metavar='EnableTLS',
+        nargs='?',
+        default='',
+        type=bool,
+        help='enable TLS or not')
+    parser.add_argument(
+        '--certFile',
+        metavar='CertFile',
+        nargs='?',
+        default='',
+        type=str,
+        help='Cert file: openssl req -new -x509 -days 365 -nodes -out server.crt -keyout server.key -subj "/C=US/ST=State/L=City/O=Organization/OU=Department/CN=example.com"')
+    parser.add_argument(
+        '--keyFile',
+        metavar='keyFile',
+        nargs='?',
+        default='',
+        type=str,
+        help='Key file: openssl req -new -x509 -days 365 -nodes -out server.crt -keyout server.key -subj "/C=US/ST=State/L=City/O=Organization/OU=Department/CN=example.com"')
+    parser.add_argument(
+        '--domainName',
+        metavar='domainName',
+        nargs='?',
+        default='fogbus2',
+        type=str,
+        help='Domain Name')
+
     return parser.parse_args()
 
 
@@ -97,5 +134,9 @@ if __name__ == '__main__':
     remoteLogger_ = RemoteLogger(
         addr=(args.bindIP, args.bindPort),
         containerName=args.containerName,
-        logLevel=args.verbose)
+        logLevel=args.verbose,
+        enableTLS=args.enableTLS,
+        certFile=args.certFile,
+        keyFile=args.keyFile,
+        domainName=args.domainName)
     remoteLogger_.run()

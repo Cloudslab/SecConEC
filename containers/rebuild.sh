@@ -1,12 +1,13 @@
 build() {
 
   cd $1
-  docker-compose \
+  docker compose \
     build
-  cd ..}
+  cd ..
+}
 
 build remoteLogger
 build master
 build user
 build actor
-cd actor/sources/taskExecutorsDockerfile && ./rebuild.sh
+cd taskExecutor/dockerFiles/ && ./rebuild.sh

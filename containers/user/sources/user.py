@@ -15,7 +15,8 @@ from utils import ResourcesDiscovery
 from utils.user import initActuator
 from utils.user import RegistrationManager
 from utils.user import UserMessageHandler
-from utils.user import WindowManager
+from utils.user.window import WindowManager
+from utils.user.applications import ObjectDetection
 
 
 class User:
@@ -24,22 +25,27 @@ class User:
             self,
             addr: Address,
             masterAddr: Address,
-            remoteLoggerAddr: Address,
             appName: str,
-            showWindow: bool,
-            label: str,
+            windowHeight: int,
             videoPath: str,
-            golInitText: str,
+            task_count: int,
             containerName: str = '',
-            logLevel=DEBUG):
+            logLevel=DEBUG,
+            enableTLS: bool = False,
+            certFile: str = '',
+            keyFile: str = '',
+            domainName: str = ''):
         self.containerName = containerName
         self.basicComponent = BasicComponent(
             role=ComponentRole.USER,
             addr=addr,
             masterAddr=masterAddr,
-            remoteLoggerAddr=remoteLoggerAddr,
             logLevel=logLevel,
-            portRange=ConfigUser.portRange)
+            portRange=ConfigUser.portRange,
+            enableTLS=enableTLS,
+            certFile=certFile,
+            keyFile=keyFile,
+            domainName=domainName)
         self.resourcesDiscovery = ResourcesDiscovery(
             basicComponent=self.basicComponent)
         self.discoverIfUnset()
@@ -48,15 +54,14 @@ class User:
             containerName=containerName)
         self.registrationManager = RegistrationManager(
             basicComponent=self.basicComponent,
-            appName=appName,
-            label=label)
+            appName=appName)
         self.actuator = initActuator(
             appName=appName,
-            label=self.registrationManager.label,
-            videoPath=videoPath,
-            showWindow=showWindow,
             basicComponent=self.basicComponent,
-            golInitText=golInitText)
+            window_height=windowHeight,
+            video_path=videoPath,
+            task_count=task_count
+        )
         if self.actuator is None:
             self.basicComponent.debugLogger.error(
                 'Application is not supported: %s',
@@ -75,11 +80,6 @@ class User:
             periodicTasks=periodicTasks)
 
     def discoverIfUnset(self):
-        remoteLogger = self.basicComponent.remoteLogger
-        if remoteLogger.addr[0] == '' or remoteLogger.addr[1] == 0:
-            self.resourcesDiscovery.discoverAndCommunicate(
-                targetRole=ComponentRole.REMOTE_LOGGER,
-                isNotSetInArgs=True)
         master = self.basicComponent.master
         if master.addr[0] == '' or master.addr[1] == 0:
             self.resourcesDiscovery.discoverAndCommunicate(
@@ -89,18 +89,21 @@ class User:
 
     def run(self):
         self.register()
-        if not self.actuator.showWindow:
-            return
-        windowManager = WindowManager(
-            basicComponent=self.basicComponent,
-            frameQueue=self.actuator.windowFrameQueue,
-            prepareWindows=self.actuator.prepare,
-            pressSpaceToStart=self.actuator.pressSpaceToStart,
-            canStart=self.actuator.canStart)
-        windowManager.run()
 
     def register(self):
-        self.registrationManager.registerAt(self.basicComponent.master.addr)
+        task_count = None
+        if isinstance(self.actuator, ObjectDetection):
+            task_count = self.actuator.task_count
+        self.registrationManager.registerAt(self.basicComponent.master.addr, task_count)
+        if not isinstance(self.actuator, ObjectDetection):
+            return
+        if not self.actuator.show_window:
+            return
+        window_manager = WindowManager(
+            basicComponent=self.basicComponent,
+            frameQueue=self.actuator.window_frame_queue,
+            prepareWindows=self.actuator.prepare)
+        window_manager.run()
 
     def uploadMedianResponseTime(self):
         responseTime = self.actuator.responseTime.median()
@@ -111,7 +114,7 @@ class User:
             messageType=MessageType.LOG,
             messageSubType=MessageSubType.RESPONSE_TIME,
             data=data,
-            destination=self.basicComponent.remoteLogger)
+            destination=self.basicComponent.master)
 
     def preparePeriodTasks(self) -> PeriodicTasks:
         periodicTasks = [(self.uploadMedianResponseTime, 10)]
@@ -146,28 +149,10 @@ def parseArg():
         type=int,
         help='Master port')
     parser.add_argument(
-        '--remoteLoggerIP',
-        metavar='RemoteLoggerIP',
-        type=str,
-        help='Remote logger ip.')
-    parser.add_argument(
-        '--remoteLoggerPort',
-        metavar='RemoteLoggerPort',
-        nargs='?',
-        default=0,
-        type=int,
-        help='Remote logger port')
-    parser.add_argument(
         '--applicationName',
         metavar='ApplicationName',
         type=str,
         help='Application Name')
-    parser.add_argument(
-        '--applicationLabel',
-        metavar='ApplicationLabel',
-        default=480,
-        type=int,
-        help='e.g. 480 or 720')
 
     parser.add_argument(
         '--containerName',
@@ -177,19 +162,6 @@ def parseArg():
         type=str,
         help='container name')
     parser.add_argument(
-        '--videoPath',
-        metavar='VideoPath',
-        nargs='?',
-        default=0,
-        type=str,
-        help='/path/to/video.mp4')
-    parser.add_argument(
-        '--showWindow',
-        metavar='ShowWindow',
-        default=True,
-        action=argparse.BooleanOptionalAction,
-        help='Show window or not')
-    parser.add_argument(
         '--verbose',
         metavar='Verbose',
         nargs='?',
@@ -197,12 +169,62 @@ def parseArg():
         type=int,
         help='Reference python logging level, from 0 to 50 integer to show log')
     parser.add_argument(
-        '--golInitText',
-        metavar='GameOfLifeInitialWorldText',
+        '--enableTLS',
+        metavar='EnableTLS',
         nargs='?',
-        default='Qifan Deng',
+        default='',
+        type=bool,
+        help='enable TLS or not')
+    parser.add_argument(
+        '--certFile',
+        metavar='CertFile',
+        nargs='?',
+        default='',
         type=str,
-        help='GameOfLife initial world text')
+        help='Cert file: '
+             'openssl req -new -x509 -days 365 -nodes '
+             '-out server.crt -keyout server.key '
+             '-subj "/C=US/ST=State/L=City/O=Organization/OU=Department/CN=example.com" ')
+    parser.add_argument(
+        '--keyFile',
+        metavar='keyFile',
+        nargs='?',
+        default='',
+        type=str,
+        help='Key file: '
+             ''
+             'openssl req -new -x509 -days 365 -nodes '
+             '-out server.crt -keyout server.key '
+             '-subj "/C=US/ST=State/L=City/O=Organization/OU=Department/CN=example.com" ')
+    parser.add_argument(
+        '--domainName',
+        metavar='domainName',
+        nargs='?',
+        default='fogbus2',
+        type=str,
+        help='Domain Name')
+    parser.add_argument(
+        '--windowHeight',
+        metavar='windowHeight',
+        nargs='?',
+        default=None,
+        type=int,
+        help='Window height')
+    parser.add_argument(
+        '--videoPath',
+        metavar='videoPath',
+        nargs='?',
+        default=None,
+        type=str,
+        help='Video path')
+    parser.add_argument(
+        '--taskCount',
+        metavar='taskCount',
+        nargs='?',
+        default=2,
+        type=int,
+        help='Task count')
+
     return parser.parse_args()
 
 
@@ -212,11 +234,14 @@ if __name__ == "__main__":
         containerName=args.containerName,
         addr=(args.bindIP, args.bindPort),
         masterAddr=(args.masterIP, args.masterPort),
-        remoteLoggerAddr=(args.remoteLoggerIP, args.remoteLoggerPort),
         appName=args.applicationName,
-        label=args.applicationLabel,
-        showWindow=args.showWindow,
+        logLevel=args.verbose,
+        enableTLS=args.enableTLS,
+        certFile=args.certFile,
+        keyFile=args.keyFile,
+        domainName=args.domainName,
+        windowHeight=args.windowHeight,
         videoPath=args.videoPath,
-        golInitText=args.golInitText,
-        logLevel=args.verbose)
+        task_count=args.taskCount
+    )
     user_.run()

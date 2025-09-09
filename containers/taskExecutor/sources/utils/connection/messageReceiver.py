@@ -1,29 +1,22 @@
+import os.path
+import ssl
 from abc import abstractmethod
 from queue import Queue
 from socket import AF_INET
-from socket import error
 from socket import SO_REUSEADDR
 from socket import SOCK_STREAM
 from socket import socket
 from socket import SOL_SOCKET
-from struct import calcsize
-from struct import unpack
 from threading import Event
 from threading import Thread
 from traceback import print_exc
-from typing import Any
 from typing import Tuple
+from time import sleep
 
 from .message import MessageReceived
-from .messageSender import FORMAT
-from .messageSender import MessageSender
-from .request import ConnectionRequest
-from ..tools import decrypt
+from .messageSender import MessageSender, Connection, Connections, receive_message, MessageToSend
 from ..tools.terminate import terminate
-from ..types import Address
-from ..types import ComponentRole
-
-PAYLOAD_SIZE = calcsize(FORMAT)
+from ..types import Address, ComponentRole, MessageType, MessageSubType
 
 
 class MessageReceiver(MessageSender):
@@ -37,37 +30,59 @@ class MessageReceiver(MessageSender):
             ignoreSocketError: bool = False,
             messagesReceivedQueue: Queue[
                 Tuple[MessageReceived, int]] = Queue(),
-            threadNumber: int = 8):
+            threadNumber: int = 8,
+            cert_file: str = None,
+            key_file: str = None,
+            tls_enabled: bool = False):
+
+        self.conns: Connections[str, Connection] = Connections()
+        self.messagesReceivedQueue: Queue[
+            Tuple[MessageReceived, int]] = messagesReceivedQueue
         MessageSender.__init__(
             self,
             role=role,
             addr=addr,
             logLevel=logLevel,
-            ignoreSocketError=ignoreSocketError)
+            messagesReceivedQueue=self.messagesReceivedQueue,
+            ignoreSocketError=ignoreSocketError,
+            conns=self.conns)
         self.portRange = portRange
         self.serverSocket = socket(
             AF_INET,
             SOCK_STREAM)
-        self.messagesReceivedQueue: Queue[
-            Tuple[MessageReceived, int]] = messagesReceivedQueue
+        self.cert_file = cert_file
+        self.key_file = key_file
+        self.tls_enabled = tls_enabled
+        if self.tls_enabled:
+            if not self.cert_file or not self.key_file:
+                self.debugLogger.error('TLS enabled but no cert or key file provided')
+            elif not os.path.exists(self.cert_file) or not os.path.exists(self.key_file):
+                self.debugLogger.error('TLS enabled but no cert or key file not exist in path: %s or %s',
+                                       self.cert_file, self.key_file)
+                terminate()
+            else:
+                self.debugLogger.info('TLS enabled with cert file: %s and key file: %s', self.cert_file, self.key_file)
+
+        self.tls_socket = None
+
         self.threadsNumber: int = threadNumber
-        self.requests: Queue[ConnectionRequest] = Queue()
         self.serveEvent: Event = Event()
         self.autoListen()
         self.prepareThreadsPool()
 
     def prepareThreadsPool(self):
+        j = 0
         for i in range(self.threadsNumber):
             Thread(
-                target=self.messageReceiver,
-                name="MessageReceiver-%d" % i).start()
-            Thread(
                 target=self.messageSender,
-                name="MessageSender-%d" % i).start()
-            for _ in range(2):
+                name=f'MessageSender{j}').start()
+            j += 1
+            k = 0
+            for _ in range(4):
                 Thread(
                     target=self.handle,
-                    name="BasicMessageHandler-%d" % i).start()
+                    name=f"BasicMessageHandler{j}-{k}").start()
+                k += 1
         Thread(target=self.serve, name="ConnectionServer").start()
 
     def autoListen(self):
@@ -82,15 +97,53 @@ class MessageReceiver(MessageSender):
             terminate()
 
     def serve(self):
-
         self.serveEvent.set()
+        i = 0
         while True:
-            clientSocket, clientAddress = self.serverSocket.accept()
-            request = ConnectionRequest(clientSocket, clientAddress)
-            self.requests.put(request)
+            try:
+                client_socket, clientAddress = self.serverSocket.accept()
+                if self.tls_enabled:
+                    client_socket = self.wrap_socket_tls(client_socket, server_side=True)
+                self.debugLogger.info(f'KEEP RECEIVING: {clientAddress}')
+                messageInDict, packetSize, buffer = receive_message(b'', client_socket)
+                message = MessageReceived.fromDict(messageInDict)
+                source_addr = message.source.addr
+                self.conns.acquire()
+                if source_addr not in self.conns or client_socket != self.conns[source_addr].socket:
+                    self.conns[source_addr] = Connection(
+                        buffer=buffer,
+                        tls_enabled=self.tls_enabled,
+                        recv_queue=self.messagesReceivedQueue,
+                        send_queue=Queue(),
+                        socket_obj=client_socket,
+                        addr=source_addr)
+                self.conns.release()
+                # forward log messages when role is MASTER
+                #  Due to security requirementsUser, actor and task executor do not see RemoteLogger
+                # they send logs to Master and Master forwards them to RemoteLogger.
+                # This will reduce the attack surface.
+                if (self.role == ComponentRole.MASTER and
+                        message.type == MessageType.LOG and
+                        message.type != MessageSubType.ALL_RESOURCES_PROFILES):
+                    self.sendMessage(messageToSend=MessageToSend.fromDict(messageInDict))
+                    continue
+                self.messagesReceivedQueue.put((message, packetSize))
+                i += 1
+            except ssl.SSLError:
+                self.debugLogger.error(f'Received invalid TLS connection from {clientAddress}')
+                client_socket.close()
+                continue
+            except Exception:
+                print_exc()
+                if self.role not in (ComponentRole.REMOTE_LOGGER, ComponentRole.MASTER):
+                    self.debugLogger.error('Failed to send message. Exiting')
+                    terminate()
+                continue
 
-    def tryListeningOn(self, addr: Address, portRange: Tuple[int, int]) -> bool:
-        ip, targetPort = addr[0], addr[1]
+    def tryListeningOn(self,
+                       addr: Address,
+                       portRange: Tuple[int, int]) -> bool:
+        ip, targetPort = '0.0.0.0', addr[1]
         portLower, portUpper = portRange
         if targetPort != 0 and \
                 (targetPort < portLower or targetPort >= portUpper):
@@ -98,71 +151,54 @@ class MessageReceiver(MessageSender):
                 targetPort, portLower, portUpper))
         # Specified port
         if targetPort != 0:
-            success = self.listenOn(addr=(ip, targetPort))
-            if success:
-                return True
-            else:
+            try:
+                success = self.listenOn(addr=(ip, targetPort))
+                if success:
+                    return True
+            except Exception:
+                from traceback import print_exc
+                print_exc()
                 return False
+
         # Did not specify port
         for targetPort in range(portRange[0], portRange[1]):
-            success = self.listenOn(addr=(ip, targetPort))
-            if success:
-                return True
+            try:
+                success = self.listenOn(addr=(ip, targetPort))
+                if success:
+                    return True
+            except OSError:
+                self.debugLogger.warning("Failed to listen on port %d, sleep and try next port", targetPort)
+                sleep(0.1)
+                continue
         return False
 
-    def listenOn(self, addr: Address) -> bool:
-        try:
-            self.serverSocket.setsockopt(
-                SOL_SOCKET,
-                SO_REUSEADDR,
-                1)
-            self.serverSocket.bind(addr)
-            self.serverSocket.listen()
-            self.addr = self.serverSocket.getsockname()
-            self.debugLogger.info(
-                'Listening at %s' % str(self.addr))
-            return True
-        except OSError:
-            return False
+    def wrap_socket_tls(self,
+                        socket_object,
+                        server_side=True):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(self.cert_file, self.key_file)
+        tls_socket = context.wrap_socket(socket_object, server_side=server_side)
+        return tls_socket
 
-    def messageReceiver(self):
-        while True:
-            try:
-                request = self.requests.get()
-                content, packetSize = self.receiveMessage(request.clientSocket)
-                if packetSize == 0:
-                    continue
-                message = MessageReceived.fromDict(content)
-                self.messagesReceivedQueue.put((message, packetSize))
-            except OSError:
-                continue
-
-    @staticmethod
-    def receiveMessage(clientSocket: socket) -> Tuple[Any, int]:
-        result = None
-        buffer = b''
-        try:
-            clientSocket.settimeout(3)
-            while len(buffer) < PAYLOAD_SIZE:
-                buffer += clientSocket.recv(4096)
-            packedDataSize = buffer[:PAYLOAD_SIZE]
-            buffer = buffer[PAYLOAD_SIZE:]
-            dataSize = unpack(FORMAT, packedDataSize)[0]
-            while len(buffer) < dataSize:
-                buffer += clientSocket.recv(4096)
-            data = buffer[:dataSize]
-            result = data
-        except (OSError, error):
-            pass
-        clientSocket.close()
-        if result is None:
-            return {}, 0
-        return decrypt(result), len(result)
+    def listenOn(self,
+                 addr: Address) -> bool:
+        self.addr = (self.addr[0], addr[1])
+        self.serverSocket.setsockopt(
+            SOL_SOCKET,
+            SO_REUSEADDR,
+            1)
+        self.serverSocket.bind(addr)
+        self.serverSocket.listen()
+        self.debugLogger.info(
+            'Listening at %s' % str(self.serverSocket.getsockname()))
+        self.debugLogger.info(
+            'Advertise addr is at %s' % str(self.addr))
+        return True
 
     @abstractmethod
     def handle(self):
         pass
 
     @abstractmethod
-    def handlerMessage(self):
+    def handleMessage(self):
         pass

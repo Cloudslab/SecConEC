@@ -1,38 +1,30 @@
 # Base
-FROM python:3.9-alpine3.14 as base
+FROM python:3.9-slim AS base
 
-FROM base as builder
-
-RUN mkdir /install
-WORKDIR /install
-
-## Dependencies
-RUN apk add --no-cache \
-    make automake gcc g++ subversion \
-    linux-headers
-
-RUN apk add --no-cache \
-    gfortran openblas-dev lapack-dev \
-    jpeg-dev zlib-dev
+FROM base AS pythonlibs
 
 ## Python libraries
-RUN python -m pip install --retries 100 --default-timeout=600  --no-cache-dir --upgrade pip
-COPY ./sources/requirements.txt /install/requirements.txt
-RUN python -m pip install --retries 100 --default-timeout=600  \
-    --prefix=/install \
-    --no-cache-dir \
-    -r /install/requirements.txt
+RUN apt update
+RUN apt install -y gcc # for cx-Oracle
+
+RUN python -m pip install --upgrade pip
+COPY ./sources/requirements.txt /tmp/requirements.txt
+RUN python -m pip install --prefix=/install  -r /tmp/requirements.txt
 
 # Copy files
+FROM base AS oslibs
+RUN apt update
+RUN apt install -y iperf3
+
 FROM base
-COPY --from=builder /install /usr/local
-COPY --from=builder /usr/lib/ /usr/lib/
+WORKDIR /workplace
+COPY --from=pythonlibs /install /usr/local
+COPY --from=oslibs /usr/lib/ /usr/lib/
 COPY ./sources/ /workplace
-RUN apk add --no-cache iperf3
 
 # Hostname
 RUN echo "Master" > /etc/hostname
-
+RUN openssl req -new -x509 -days 365 -nodes -out server.crt -keyout server.key \
+               -subj "/C=US/ST=State/L=City/O=Organization/OU=Department/CN=example.com"
 # Run Master
-WORKDIR /workplace
 ENTRYPOINT ["python", "-u", "master.py"]

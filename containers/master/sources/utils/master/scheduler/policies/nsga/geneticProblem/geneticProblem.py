@@ -32,6 +32,7 @@ class GeneticProblem(Problem):
         self.individualEvents = [Event() for _ in range(self.populationSize)]
         self.individualQueue: Queue[Tuple[int, List[int], Event]] = Queue()
         self.result = np.asarray([.0 for _ in range(self.populationSize)])
+        self.resultAB = np.asarray([.0 for _ in range(self.populationSize)])
         self.runEvaluationThreadPool(threadNum=threadNum)
 
         self.estimator = Estimator(
@@ -44,15 +45,19 @@ class GeneticProblem(Problem):
         self.choicesEachVariable = [len(actors) - 1 for actors in
                                     self.estimator.actorsByTaskName.values()]
         self.variableNum = len(self.estimator.taskList)
+
+        A, B = (0.5, 1), (0.1, 1)
         self.lowerBound = [0 for _ in range(self.variableNum)]
+        self.lowerBound.extend([A[0], B[0]])
         self.upperBound = self.choicesEachVariable
+        self.upperBound.extend([A[1], B[1]])
         Problem.__init__(
             self,
             xl=self.lowerBound,
             xu=self.upperBound,
             n_obj=1,
-            n_var=self.variableNum,
-            type_var=np.int)
+            n_var=self.variableNum + 2,
+            type_var=float)
         self.evaluationRecords = []
 
     def getChoicesEachVariable(self, actorsByTaskName: Dict[str, Actor]) \
@@ -80,11 +85,38 @@ class GeneticProblem(Problem):
             event.set()
 
     def _evaluate(self, indexSequenceList, out, *args, **kwargs):
+        for i in range(len(indexSequenceList)):
+            for j in range(len(indexSequenceList[i][:-2])):
+                indexSequenceList[i][j] = int(indexSequenceList[i][j])
+
         for i, indexSequence in enumerate(indexSequenceList):
             self.individualQueue.put(
                 (i, indexSequence, self.individualEvents[i]))
         for event in self.individualEvents:
             event.wait()
             event.clear()
-        out['F'] = self.result
+
+        max_cost = max(self.result)
+
+        N = 3
+        M = len(indexSequenceList[0]) - 2
+        for i in range(len(self.result)):
+            a = indexSequenceList[i][-2]
+            b = indexSequenceList[i][-1]
+            normalized = self.result[i] / max_cost
+            right = 0
+            for x in indexSequenceList[i][:-2]:
+                x = int(x)
+                if x < 1:
+                    right += 1
+                elif x < 2:
+                    right += 0.5
+                else:
+                    right += 0.01
+            right /= M
+            self.resultAB[i] = a * normalized + b * right
+            print(self.resultAB[i], a, normalized, b, right)
+
+        # out['F'] = self.result
+        out['F'] = self.resultAB
         self.evaluationRecords.append(min(out['F']))

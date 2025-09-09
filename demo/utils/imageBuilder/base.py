@@ -4,6 +4,7 @@ from .camelToSnake import camelToSnake
 
 
 def crossCompileBase(
+        image_tag,
         composeFolder: str,
         proxy: str = None,
         platforms: str = 'linux/amd64,'
@@ -21,8 +22,8 @@ def crossCompileBase(
                    ' --build-arg https_proxy=%s' % proxy
     basename = camelToSnake(basename)
     if len(dockerHubUsername):
-        command += ' -t %s/fogbus2-%s' % (dockerHubUsername,
-                                          basename)
+        command += ' -t %s/fogbus2-%s:%s' % (dockerHubUsername,
+                                          basename, image_tag)
     if push:
         command += ' --push'
     command += ' .'
@@ -48,6 +49,7 @@ class ImageBuilder:
 
     def build(
             self,
+            image_tag,
             composeFolder: str = None,
             proxy: str = None,
             platforms: str = '',
@@ -59,12 +61,13 @@ class ImageBuilder:
 
         if platforms:
             return self.crossCompile(
+                image_tag=image_tag,
                 composeFolder=composeFolder,
                 proxy=proxy,
                 platforms=platforms,
                 dockerHubUsername=dockerHubUsername,
                 push=push)
-        command = 'cd %s && docker-compose build' % composeFolder
+        command = 'cd %s && docker compose build' % composeFolder
         if proxy is not None:
             command += ' --build-arg http_proxy=%s' % proxy + \
                        ' --build-arg https_proxy=%s' % proxy
@@ -72,6 +75,7 @@ class ImageBuilder:
 
     def crossCompile(
             self,
+            image_tag: str,
             composeFolder: str,
             proxy: str = None,
             platforms: str = 'linux/amd64,'
@@ -83,6 +87,7 @@ class ImageBuilder:
         if composeFolder is None:
             composeFolder = self.composeFolder
         return crossCompileBase(
+            image_tag=image_tag,
             composeFolder=composeFolder,
             proxy=proxy,
             platforms=platforms,

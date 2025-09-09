@@ -37,6 +37,9 @@ class DataRateProfiler:
         self.basicComponent.debugLogger.debug('Profiling data rate ...')
         if self.registeredActors is None:
             return
+
+        self.basicComponent.debugLogger.debug('Data rate profiling has been skipped')
+        return
         self.profileDataRate(registeredActors=self.registeredActors)
 
     def profileDataRate(self, registeredActors: RegisteredActors):

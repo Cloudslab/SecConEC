@@ -12,7 +12,7 @@ from utils import MessageType
 from utils import PeriodicTaskRunner
 from utils import PeriodicTasks
 from utils import terminate
-from utils.taskExecutor import BaseTask
+from utils.taskExecutor.tasks.base import BaseTask
 from utils.taskExecutor import initTask
 from utils.taskExecutor import RegistrationManager
 from utils.taskExecutor import ResourcesProfiler
@@ -25,7 +25,6 @@ class TaskExecutor:
             self,
             addr,
             masterAddr,
-            remoteLoggerAddr,
             userID: str,
             taskName: str,
             taskToken: str,
@@ -34,14 +33,22 @@ class TaskExecutor:
             totalCPUCores: int,
             cpuFreq: float,
             containerName: str = '',
-            logLevel=logging.DEBUG):
+            networkName: str = '',
+            logLevel=logging.DEBUG,
+            enableTLS: bool = False,
+            certFile: str = '',
+            keyFile: str = '',
+            domainName: str = ''):
         self.basicComponent = BasicComponent(
             role=ComponentRole.TASK_EXECUTOR,
             addr=addr,
             masterAddr=masterAddr,
-            remoteLoggerAddr=remoteLoggerAddr,
             logLevel=logLevel,
-            portRange=ConfigTaskExecutor.portRange)
+            portRange=ConfigTaskExecutor.portRange,
+            enableTLS=enableTLS,
+            certFile=certFile,
+            keyFile=keyFile,
+            domainName=domainName)
         self.task: BaseTask = initTask(taskName)
         if self.task is None:
             self.basicComponent.debugLogger.error(
@@ -49,6 +56,7 @@ class TaskExecutor:
             terminate()
             return
         self.containerName = containerName
+        self.networkName = networkName
         self.registrationManager = RegistrationManager(
             basicComponent=self.basicComponent,
             userID=userID,
@@ -60,7 +68,9 @@ class TaskExecutor:
             cpuFreq=cpuFreq)
         self.containerManager = ContainerManager(
             basicComponent=self.basicComponent,
-            containerName=containerName)
+            containerName=containerName,
+            networkName=networkName
+        )
 
         self.profiler = ResourcesProfiler(
             basicComponent=self.basicComponent,
@@ -88,7 +98,7 @@ class TaskExecutor:
             messageType=MessageType.LOG,
             messageSubType=MessageSubType.MEDIAN_PROCESSING_TIME,
             data=data,
-            destination=self.basicComponent.remoteLogger)
+            destination=self.basicComponent.master)
 
     def run(self):
         self.register()
@@ -118,6 +128,18 @@ def parseArg():
         type=str,
         help='TaskExecutor ip.')
     parser.add_argument(
+        '--bindPort',
+        metavar='BindPort',
+        nargs='?',
+        default=0,
+        type=int,
+        help='Bind port')
+    parser.add_argument(
+        '--network',
+        metavar='docker network',
+        type=str,
+        help='The network this container will use')
+    parser.add_argument(
         '--masterIP',
         metavar='MasterIP',
         type=str,
@@ -127,16 +149,6 @@ def parseArg():
         metavar='MasterPort',
         type=int,
         help='Master port')
-    parser.add_argument(
-        '--remoteLoggerIP',
-        metavar='RemoteLoggerIP',
-        type=str,
-        help='Remote logger ip.')
-    parser.add_argument(
-        '--remoteLoggerPort',
-        metavar='RemoteLoggerPort',
-        type=int,
-        help='Remote logger port')
     parser.add_argument(
         '--userID',
         metavar='UserID',
@@ -186,22 +198,55 @@ def parseArg():
         default='',
         type=str,
         help='container name')
+    parser.add_argument(
+        '--networkName',
+        metavar='networkName',
+        nargs='?',
+        default='',
+        type=str,
+        help='networkName')
+    parser.add_argument(
+        '--enableTLS',
+        metavar='EnableTLS',
+        nargs='?',
+        type=bool,
+        help='enable TLS or not')
+    parser.add_argument(
+        '--certFile',
+        metavar='CertFile',
+        nargs='?',
+        default='',
+        type=str,
+        help='Cert file: openssl req -new -x509 -days 365 -nodes -out server.crt -keyout server.key -subj "/C=US/ST=State/L=City/O=Organization/OU=Department/CN=example.com" ')
+    parser.add_argument(
+        '--keyFile',
+        metavar='keyFile',
+        nargs='?',
+        default='',
+        type=str,
+        help='Key file: openssl req -new -x509 -days 365 -nodes -out server.crt -keyout server.key -subj "/C=US/ST=State/L=City/O=Organization/OU=Department/CN=example.com"')
+    parser.add_argument(
+        '--domainName',
+        metavar='domainName',
+        nargs='?',
+        default='fogbus2',
+        type=str,
+        help='Domain Name')
+
     return parser.parse_args()
 
 
 if __name__ == '__main__':
     args = parseArg()
-
     if args.childrenTaskTokens == 'None':
         args.childrenTaskTokens = []
     elif isinstance(args.childrenTaskTokens, str):
         args.childrenTaskTokens = args.childrenTaskTokens.split(',')
-
     taskExecutor_ = TaskExecutor(
         containerName=args.containerName,
-        addr=(args.bindIP, 0),
+        networkName=args.networkName,
+        addr=(args.bindIP, args.bindPort),
         masterAddr=(args.masterIP, args.masterPort),
-        remoteLoggerAddr=(args.remoteLoggerIP, args.remoteLoggerPort),
         userID=args.userID,
         taskName=args.taskName,
         taskToken=args.taskToken,
@@ -209,5 +254,9 @@ if __name__ == '__main__':
         actorID=args.actorID,
         totalCPUCores=args.totalCPUCores,
         cpuFreq=args.cpuFrequency,
-        logLevel=args.verbose)
+        logLevel=args.verbose,
+        enableTLS=args.enableTLS,
+        certFile=args.certFile,
+        keyFile=args.keyFile,
+        domainName=args.domainName)
     taskExecutor_.run()

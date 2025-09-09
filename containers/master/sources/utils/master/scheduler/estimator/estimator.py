@@ -34,6 +34,7 @@ class Estimator:
         self.taskNameToIndex = self.generateTaskNameToIndex()
         self.allActors = allActors
         self.actorsByTaskName = self.filterActors(allActors)
+        self.baseCostForNormalizing = None
 
     def filterActors(self, allActors: List[Actor]) -> Dict[str, List[Actor]]:
         """
@@ -44,14 +45,15 @@ class Estimator:
         """
         availableActors = {}
         for taskName in self.taskList:
-            imageName = 'fogbus2-%s:latest' % camelToSnake(taskName)
             availableActors[taskName] = []
             if not self.isContainerMode:
                 availableActors[taskName] = allActors
                 continue
+            imageName = 'fogbus2-%s:1.0' % camelToSnake(
+                'ObjectDetectionYolov7' if taskName.startswith('ObjectDetectionYolov7') else taskName)
             for actor in allActors:
                 if imageName not in actor.actorResources.images:
-                    if 'cloudslab/'+ imageName not in \
+                    if 'cloudslab/' + imageName not in \
                             actor.actorResources.images:
                         continue
                 availableActors[taskName].append(actor)
@@ -66,7 +68,7 @@ class Estimator:
         is an int value, which is the index of $availableActors.
         :return: Estimated total cost of the input indexSequence
         """
-        individual = self.mapIndexSequenceToActorSequence(indexSequence)
+        individual = self.mapIndexSequenceToActorSequence(indexSequence[:-2])
         # For an application, there may be multiple tasks at the entry
         entryCostList = self.entryCost(individual)
         entryCostList = [[cost] for cost in entryCostList]
@@ -282,12 +284,12 @@ class Estimator:
         actorSequence = [None for _ in range(len(indexes))]
         for j, index in enumerate(indexes):
             taskName = self.taskList[j]
-            actorSequence[j] = self.actorsByTaskName[taskName][indexes[j]]
+            actorSequence[j] = self.actorsByTaskName[taskName][int(indexes[j])]
         return actorSequence
 
     def mapIndexSequenceToHostIDSequence(self, indexes: List[int]) \
             -> List[str]:
-        actorSequence = self.mapIndexSequenceToActorSequence(indexes)
+        actorSequence = self.mapIndexSequenceToActorSequence(indexes[:-2])
         hostIDSequence = self.mapActorSequenceToHostIDSequence(actorSequence)
         return hostIDSequence
 

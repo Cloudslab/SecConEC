@@ -5,9 +5,8 @@ from docker.client import DockerClient
 from docker.errors import APIError
 from .base import BaseInitiator
 from ...component.basic import BasicComponent
-from ...tools import filterIllegalCharacter,encrypt
+from ...tools import filterIllegalCharacter
 from ...types import Component
-from ...types import ActorResources
 
 
 class ActorInitiator(BaseInitiator):
@@ -27,13 +26,10 @@ class ActorInitiator(BaseInitiator):
             self,
             me: Component,
             master: Component,
-            remoteLogger: Component,
             isContainerMode: bool):
         args = ' --bindIP %s' % me.addr[0] + \
                ' --masterIP %s' % master.addr[0] + \
                ' --masterPort %d' % master.addr[1] + \
-               ' --remoteLoggerIP %s' % remoteLogger.addr[0] + \
-               ' --remoteLoggerPort %d' % remoteLogger.addr[1] + \
                ' --verbose %d' % self.basicComponent.debugLogger.level
         if not isContainerMode:
             self.initActorOnHost(args=args)

@@ -22,7 +22,11 @@ class BasicComponent(Communicator, ABC):
             logLevel: int,
             masterAddr: Address,
             remoteLoggerAddr: Address,
-            ignoreSocketError: bool = False):
+            ignoreSocketError: bool = False,
+            enableTLS: bool = False,
+            certFile: str = '',
+            keyFile: str = '',
+            domainName: str = ''):
         Communicator.__init__(
             self,
             role=role,
@@ -31,7 +35,11 @@ class BasicComponent(Communicator, ABC):
             masterAddr=masterAddr,
             remoteLoggerAddr=remoteLoggerAddr,
             ignoreSocketError=ignoreSocketError,
-            portRange=portRange)
+            portRange=portRange,
+            enableTLS=enableTLS,
+            certFile=certFile,
+            keyFile=keyFile,
+            domainName=domainName)
         self.handleSignal()
         self.serveEvent.wait()
         self.setName(addr=self.addr)

@@ -15,7 +15,7 @@ class RegistrationManager:
             self,
             basicComponent: BasicComponent,
             appName: str,
-            label: str):
+            label: str = 'N/A'):
 
         self.label = label
         self.appName = appName
@@ -23,7 +23,7 @@ class RegistrationManager:
         self.actorsCount = 0
         self.requestSentTime = 0
 
-    def registerAt(self, masterAddr: Address):
+    def registerAt(self, masterAddr: Address, task_count=None):
         self.basicComponent.master = Component(
             hostID='HostID',
             role=ComponentRole.MASTER,
@@ -32,7 +32,10 @@ class RegistrationManager:
         data = {
             'label': self.label,
             'applicationName': self.appName,
-            'hostID': self.basicComponent.hostID}
+            'hostID': self.basicComponent.hostID,
+            'domainName': self.basicComponent.domainName}
+        if task_count:
+            data['task_count'] = task_count
 
         self.basicComponent.sendMessage(
             messageType=MessageType.REGISTRATION,
@@ -83,5 +86,5 @@ class RegistrationManager:
                 data={},
                 destination=destination)
             return True
-        except Exception:
+        except OSError:
             return False

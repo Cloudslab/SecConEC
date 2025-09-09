@@ -50,6 +50,7 @@ class BaseNSGA(BaseScheduler):
             isContainerMode: bool):
         BaseScheduler.__init__(
             self, schedulerName=schedulerName, isContainerMode=isContainerMode)
+        self.scaler = NSGAScaler
         self.knownMasters = knownMasters
         self.minimumActors = minimumActors
         self.basicComponent = basicComponent
@@ -143,9 +144,13 @@ class BaseNSGA(BaseScheduler):
             minIndex = np.argmin(result.F)
             cost = result.F[minIndex][0]
             indexSequence = result.X[minIndex]
+
+            print('!' * 20, indexSequence)
             indexSequence = list(indexSequence.astype(int))
         else:
             cost = result.F[0]
+            print('!' * 20, result.X)
+
             indexSequence = list(result.X.astype(int))
         indexToHostID = self.geneticProblem.estimator.mapIndexSequenceToHostIDSequence(
             indexSequence)

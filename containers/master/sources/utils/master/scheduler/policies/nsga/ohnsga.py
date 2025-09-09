@@ -1,5 +1,8 @@
+import numpy as np
+import random
 from typing import List
 from typing import Set
+from typing import Tuple
 
 from pymoo.algorithms.genetic_algorithm import GeneticAlgorithm
 from pymoo.algorithms.nsga2 import NSGA2 as NSGA2_
@@ -25,7 +28,9 @@ class OHNSGA(BaseNSGA):
             basicComponent: BasicComponent,
             estimationThreadNum: int,
             isContainerMode: bool,
-            historyRatio: float = .5):
+            historyRatio: float = .5,
+            A: Tuple[float, float] = (0.1, 1),
+            B: Tuple[float, float] = (0.1, 1)):
         BaseNSGA.__init__(
             self,
             knownMasters=knownMasters,
@@ -37,6 +42,8 @@ class OHNSGA(BaseNSGA):
             estimationThreadNum=estimationThreadNum,
             isContainerMode=isContainerMode)
         self.historyRatio = historyRatio
+        self.A = A
+        self.B = B
 
     def prepareGeneticAlgorithm(
             self, application: Application, estimator: Estimator) \
@@ -79,7 +86,9 @@ class OHNSGA(BaseNSGA):
 
     def fillWithRandomIndexSequence(self, indexSequences: List[List[int]]):
         upperBounds = self.geneticProblem.upperBound
+        upperBounds.extend([self.A[1], self.B[1]])
         lowerBounds = [0 for _ in range(len(upperBounds))]
+        lowerBounds.extend([self.A[0], self.B[0]])
         variableNum = self.geneticProblem.variableNum
         indexSequencesRandom = randomPopulation(
             lowerBounds=lowerBounds,
@@ -88,8 +97,9 @@ class OHNSGA(BaseNSGA):
             populationSize=self.populationSize)
 
         for i, indexSequence in enumerate(indexSequences):
+            indexSequence.extend([self.A[0], self.B[0]])
+            random.shuffle(indexSequence)
             indexSequencesRandom[i] = indexSequence
-
         population = Population.new("X", indexSequencesRandom)
         Evaluator_().eval(self.geneticProblem, population)
         for i in range(len(population)):

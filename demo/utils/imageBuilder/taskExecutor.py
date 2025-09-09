@@ -3,6 +3,7 @@ import os
 from .camelToSnake import camelToSnake
 from .base import crossCompileBase
 
+
 class TaskExecutorImageBuilder:
 
     def __init__(self):
@@ -15,13 +16,24 @@ class TaskExecutorImageBuilder:
 
     def build(
             self,
+            image_tag,
             proxy: str = None,
             platforms: str = '',
             dockerHubUsername: str = '',
             push: bool = False) -> int:
+        # get the parentfolder name
+        parentFolder = os.path.abspath(os.path.join(self.dockerFilesFolder, '.'))
+        old_folders = os.listdir(self.dockerFilesFolder)
+        all_folders = []
+        for folder in old_folders:
+            all_folders.append(os.path.join(self.dockerFilesFolder, folder))
 
-        for folder in os.listdir(self.dockerFilesFolder):
-            folderAbsPath = os.path.join(self.dockerFilesFolder, folder)
+        new_folders = []
+        for folder in os.listdir(parentFolder):
+            if folder not in {'dockerFiles', 'sources'}:
+                new_folders.append(os.path.join(parentFolder, folder))
+
+        for folderAbsPath in old_folders + new_folders:
             composeFilepath = os.path.join(folderAbsPath, 'docker-compose.yml')
             if not os.path.exists(composeFilepath):
                 continue
@@ -30,17 +42,18 @@ class TaskExecutorImageBuilder:
                 folderAbsPath, folderAbsPath))
             if platforms != '':
                 ret = self.crossCompile(
+                    image_tag=image_tag,
                     composeFolder=folderAbsPath,
                     proxy=proxy,
                     platforms=platforms,
                     dockerHubUsername=dockerHubUsername,
                     push=push)
             else:
-                command = 'cd %s && docker-compose build' % folderAbsPath
-                
+                command = 'cd %s && docker compose build' % folderAbsPath
+
                 if proxy is not None:
                     command += ' --build-arg http_proxy=%s' % proxy + \
-                            ' --build-arg https_proxy=%s' % proxy
+                               ' --build-arg https_proxy=%s' % proxy
                 ret = os.system(
                     'cd %s && docker-compose build' % folderAbsPath)
             # delete sources folder
@@ -52,6 +65,7 @@ class TaskExecutorImageBuilder:
 
     @staticmethod
     def crossCompile(
+            image_tag: str,
             composeFolder: str,
             proxy: str = None,
             platforms: str = 'linux/amd64,'
@@ -61,6 +75,7 @@ class TaskExecutorImageBuilder:
             dockerHubUsername: str = '',
             push: bool = False):
         return crossCompileBase(
+            image_tag=image_tag,
             composeFolder=composeFolder,
             proxy=proxy,
             platforms=platforms,

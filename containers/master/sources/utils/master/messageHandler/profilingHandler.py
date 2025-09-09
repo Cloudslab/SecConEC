@@ -87,13 +87,14 @@ class ProfilingHandler:
             sourceHostID: str):
         self._runningIperfServer.acquire()
         server = NetProfServer()
-        server.bind_address = self.basicComponent.addr[0]
+        server.bind_address = '0.0.0.0'
         server.port = 60000
         while True:
             try:
                 self.basicComponent.debugLogger.debug('Run iperf server')
                 dataRateResult = server.run()
                 if 'error' in dataRateResult.json:
+                    self.basicComponent.debugLogger.warning(dataRateResult)
                     sleep(1)
                     continue
                 data = {
@@ -122,7 +123,7 @@ class ProfilingHandler:
         data = message.data
         source = message.source
         client = NetProfClient()
-        client.bind_address = self.basicComponent.addr[0]
+        client.bind_address = '0.0.0.0'
         client.server_hostname = source.addr[0]
         client.port = 60000
         client.duration = 2
@@ -134,6 +135,7 @@ class ProfilingHandler:
                 sleep(3)
                 res = client.run()
                 if 'error' in res.json:
+                    self.basicComponent.debugLogger.warning(res)
                     sleep(1)
                     continue
                 break

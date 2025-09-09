@@ -28,9 +28,11 @@ from ..profiler.decisions import Decisions
 from ..scheduler.base import BaseScheduler
 from ..scheduler.policies.nsga.base import BaseNSGA
 from ..scheduler.types import Decision
+from ..networkController.networks import NetworkController
 from ...component import BasicComponent
 from ...connection.message.received import MessageReceived
 from ...connection.message.toSend import MessageToSend
+from .signature.base import Singer
 from ...types import Component
 from ...types import ComponentRole
 from ...types import SynchronizedAttribute
@@ -47,7 +49,10 @@ class Registry(ABC):
             scheduler: BaseScheduler,
             systemPerformance: AllSystemPerformance,
             profiler: MasterProfiler,
-            waitTimeout: int = 0):
+            container_name: str,
+            waitTimeout: int = 0,
+            networkController: NetworkController = None,
+            enableOverlay: bool = False):
         self.profiler = profiler
         self.systemPerformance = systemPerformance
         self.applicationManager = applicationManager
@@ -71,8 +76,21 @@ class Registry(ABC):
         self.scheduleLock = Lock()
         self.waitTimeout = waitTimeout
 
-    def registerClient(self, message: MessageReceived):
+        self.networkController = networkController
+        self.singer = Singer(self.basicComponent.key_file)
+        self.is_container_mode = True if len(container_name) else False
+        self.container_name = container_name
+        self.enableOverlay = enableOverlay
+
+    def registerClient(self,
+                       message: MessageReceived):
         source = message.source
+        data = message.data
+        if 'domainName' not in data:
+            return terminateMessage(source, 'DomainName not provided')
+        domainName = data['domainName']
+        if not domainName.startswith(self.basicComponent.domainName):
+            return terminateMessage(source, 'Invalid domain name')
         if source.role is ComponentRole.USER:
             return self.registerUser(message)
         if source.role is ComponentRole.ACTOR:
@@ -81,32 +99,40 @@ class Registry(ABC):
             return self.registerTaskExecutor(message)
         return None
 
-    def registerActor(self, message: MessageReceived):
+    def registerActor(self,
+                      message: MessageReceived):
         return self._registerActor(
             self, message, attributeName='registeredActor')
 
-    def registerUser(self, message: MessageReceived):
+    def registerUser(self,
+                     message: MessageReceived):
         return self._registerUser(self, message, attributeName='registeredUser')
 
-    def registerTaskExecutor(self, message: MessageReceived):
+    def registerTaskExecutor(self,
+                             message: MessageReceived):
         return self._registerTaskExecutor(
             self, message, attributeName='registeredTaskExecutor')
 
-    def deregisterActor(self, actor: Actor):
+    def deregisterActor(self,
+                        actor: Actor):
         return self._deregisterActor(
             self, actor, attributeName='registeredActor')
 
-    def deregisterUser(self, user: User):
+    def deregisterUser(self,
+                       user: User):
         return self._deregisterUser(
             self, user, attributeName='registeredUser')
 
-    def deregisterTaskExecutor(self, taskExecutor: TaskExecutor):
+    def deregisterTaskExecutor(self,
+                               taskExecutor: TaskExecutor):
         return self._deregisterTaskExecutor(
             self, taskExecutor, attributeName='registeredTaskExecutor')
 
     @SynchronizedAttribute
     def _registerActor(
-            self, message: MessageReceived, attributeName='registeredActor'):
+            self,
+            message: MessageReceived,
+            attributeName='registeredActor'):
         source = message.source
         if source.hostID in self.registeredManager.actors:
             self.basicComponent.debugLogger.debug(
@@ -120,6 +146,7 @@ class Registry(ABC):
         data = message.data
         actorID = self.idManager.actor.next()
         actorResources = ActorResources.fromDict(data['actorResources'])
+        domainName = data['domainName']
 
         name, nameLogPrinting, nameConsistent = self.nameFactory.nameActor(
             source, actorID)
@@ -131,7 +158,8 @@ class Registry(ABC):
             addr=source.addr,
             componentID=actorID,
             hostID=source.hostID,
-            actorResources=actorResources)
+            actorResources=actorResources,
+            domainName=domainName)
         self.registeredManager.actors[actor] = actor
         self.profiler.updateActorResources(actor)
         data = {
@@ -139,6 +167,8 @@ class Registry(ABC):
             'name': name,
             'nameLogPrinting': nameLogPrinting,
             'nameConsistent': nameConsistent}
+        if self.is_container_mode and self.enableOverlay:
+            data['swarmJoinToken'] = self.networkController.get_worker_join_token()
         messageToRespond = MessageToSend(
             messageType=MessageType.REGISTRATION,
             messageSubType=MessageSubType.REGISTERED,
@@ -150,18 +180,52 @@ class Registry(ABC):
 
     @SynchronizedAttribute
     def _registerUser(
-            self, message: MessageReceived, attributeName='registeredUser'):
+            self,
+            message: MessageReceived,
+            attributeName='registeredUser'):
         source = message.source
         data = message.data
         userID = self.idManager.user.next()
         applicationName = data['applicationName']
         label = data['label']
-        if applicationName not in self.applicationManager.applications:
+        if applicationName == 'ObjectDetection':
+            task_count = data['task_count']
+            from ..application.task.dependency.base import TaskWithDependency
+            tasks_dict = {}
+            entry_tasks = []
+            for i in range(task_count):
+                task_name = f'ObjectDetectionYolov7#{i}'
+                task = TaskWithDependency(task_name)
+                tasks_dict[task_name] = task
+                entry_tasks.append(task)
+            application = Application(
+                name=f'ObjectDetection{task_count}Tasks',
+                tasksWithDependency=tasks_dict,
+                entryTasks=entry_tasks
+            )
+        elif applicationName == 'TrafficLightStatus':
+            from ..application.task.dependency.base import TaskWithDependency
+            tasks_dict = {}
+            entry_tasks = []
+            task_name = f'TrafficLightStatus'
+            task = TaskWithDependency(task_name)
+            tasks_dict[task_name] = task
+            entry_tasks.append(task)
+            application = Application(
+                name=f'TrafficLightStatus',
+                tasksWithDependency=tasks_dict,
+                entryTasks=entry_tasks
+            )
+        elif applicationName not in self.applicationManager.applications:
+            self.debugLogger.info(self.applicationManager.applications)
+            self.debugLogger.warning(f'Application name not valid:{applicationName}')
             return None
-        application = self.applicationManager.applications[applicationName]
+        else:
+            application = self.applicationManager.applications[applicationName]
         applicationCopy: Application = application.copy(withLabel=label)
         name, nameLogPrinting, nameConsistent = self.nameFactory.nameUser(
             source, userID, applicationCopy)
+        domainName = data['domainName']
         user = User(
             name=name,
             nameLogPrinting=nameLogPrinting,
@@ -169,7 +233,8 @@ class Registry(ABC):
             addr=source.addr,
             componentID=userID,
             hostID=source.hostID,
-            application=applicationCopy)
+            application=applicationCopy,
+            domainName=domainName)
         self.registeredManager.users[user] = user
         try:
             schedulingSuccess = self.scheduler.schedule(
@@ -181,6 +246,10 @@ class Registry(ABC):
                 decisionsQueue=self.decisionsQueue)
             if not schedulingSuccess:
                 return
+            if self.is_container_mode and self.enableOverlay:
+                network = self.networkController.create_network_for_request(user.nameConsistent)
+                self.networkController.connect_container_to_network(self.container_name, network.name)
+                self.debugLogger.info(f'{self.container_name} joined network {network.name}')
             self.checkTaskExecutorForUser(user=user)
         except Exception as e:
             print_exc()
@@ -190,7 +259,8 @@ class Registry(ABC):
             return terminateMessage(component=user, reason=str(e))
 
     @SynchronizedAttribute
-    def _registerTaskExecutor(self, message: MessageReceived,
+    def _registerTaskExecutor(self,
+                              message: MessageReceived,
                               attributeName='registeredTaskExecutor'):
         data = message.data
         source = message.source
@@ -252,7 +322,8 @@ class Registry(ABC):
 
     @SynchronizedAttribute
     def _deregisterActor(
-            self, source: Component,
+            self,
+            source: Component,
             attributeName='registeredActor'):
         if source.componentID not in self.registeredManager.actors:
             return terminateMessage(source, reason='Not registered')
@@ -262,22 +333,27 @@ class Registry(ABC):
 
     @SynchronizedAttribute
     def _deregisterUser(
-            self, source: Component,
+            self,
+            source: Component,
             attributeName='registeredUser'):
         if source.componentID not in self.registeredManager.users:
             return terminateMessage(source, reason='Not registered')
         user = self.registeredManager.users[source.componentID]
         for taskExecutor in user.taskNameToExecutor.values():
-            if taskExecutor.waitTimeout <= 0:
-                continue
-            message = waitMessage(taskExecutor=taskExecutor)
-            self.registeredManager.taskExecutors.coolOff(taskExecutor)
+            if taskExecutor.waitTimeout > 0:
+                message = waitMessage(taskExecutor=taskExecutor)
+                self.registeredManager.taskExecutors.coolOff(taskExecutor)
+            else:
+                message = terminateMessage(taskExecutor, reason='User Deregistered')
+                del self.registeredManager.taskExecutors[taskExecutor.componentID]
+                self.debugLogger.debug('Deregister: %s', taskExecutor.nameLogPrinting)
             self.basicComponent.sendMessage(messageToSend=message)
         del self.registeredManager.users[source.componentID]
 
     @SynchronizedAttribute
     def _deregisterTaskExecutor(
-            self, source: Component,
+            self,
+            source: Component,
             attributeName='registeredTaskExecutor'):
         if source.componentID not in self.registeredManager.taskExecutors:
             return terminateMessage(source, reason='Not registered')
@@ -289,13 +365,15 @@ class Registry(ABC):
         self._deregisterUser(self, source=user, attributeName='registeredUser')
         return terminateMessage(source, reason='Deregister')
 
-    def checkTaskExecutorForUser(self, user: User):
+    def checkTaskExecutorForUser(self,
+                                 user: User):
         Thread(
             target=self._checkTaskExecutorForUser,
             args=(user,),
             name='ResourcesPlacement-%s' % user.nameLogPrinting).start()
 
-    def _checkTaskExecutorForUser(self, user: User):
+    def _checkTaskExecutorForUser(self,
+                                  user: User):
         totalTaskCount = len(user.taskNameList)
         while True:
             sleep(15)
@@ -336,7 +414,8 @@ class Registry(ABC):
                     childrenTaskTokens=childrenTaskTokens)
             self.resourcePlace(user=user)
 
-    def printDecision(self, decision: Decision):
+    def printDecision(self,
+                      decision: Decision):
         evaluationRecord = decision.evaluationRecord
         evaluationRecord = [round(record, 2) for record in evaluationRecord]
         logLevel = self.basicComponent.debugLogger.level
@@ -362,7 +441,8 @@ class Registry(ABC):
             records)
 
     @staticmethod
-    def findChildrenTaskTokens(taskNameLabeled: str, user: User) \
+    def findChildrenTaskTokens(taskNameLabeled: str,
+                               user: User) \
             -> List[str]:
         application = user.application
         taskName = taskNameLabeled[:taskNameLabeled.find('-')]
@@ -379,7 +459,8 @@ class Registry(ABC):
             childrenTaskTokens.append(childTaskToken)
         return childrenTaskTokens
 
-    def resourcePlace(self, user: User):
+    def resourcePlace(self,
+                      user: User):
         user.lock.acquire()
         for compactedKey in user.unclaimedTasks:
             hostID, taskNameLabeled, taskToken = compactedKey
@@ -396,12 +477,17 @@ class Registry(ABC):
                             taskToken=taskToken,
                             childrenTaskTokens=childrenTaskTokens)
                         continue
+            if self.is_container_mode and self.enableOverlay:
+                networkName = self.networkController.generate_network_name(user.nameConsistent)
+            else:
+                networkName = None
             self.sendInitTaskExecutorMsg(
                 hostID=hostID,
                 user=user,
                 taskNameLabeled=taskNameLabeled,
                 taskToken=taskToken,
-                childrenTaskTokens=childrenTaskTokens)
+                childrenTaskTokens=childrenTaskTokens,
+                networkName=networkName)
         user.lock.release()
 
     def sendReuseTaskExecutorMsg(
@@ -434,7 +520,8 @@ class Registry(ABC):
             user: User,
             taskNameLabeled: str,
             taskToken: str,
-            childrenTaskTokens: List[str]):
+            childrenTaskTokens: List[str],
+            networkName: str):
         actor = self.registeredManager.actors[hostID]
         data = {
             'userName': user.name,
@@ -442,9 +529,16 @@ class Registry(ABC):
             'taskToken': taskToken,
             'label': user.application.label,
             'userID': user.componentID,
-            'childrenTaskTokens': childrenTaskTokens}
+            'childrenTaskTokens': childrenTaskTokens,
+            'actorID': actor.componentID,
+            'signedAttributes': ['taskName', 'taskToken', 'actorID', 'userID', 'childrenTaskTokens']}
+        if networkName:
+            data['networkName'] = networkName
+            data['signedAttributes'].append('networkName')
+        signed_data = self.singer.sign_dictionary(data)
+        signed_data['taskName'] = taskNameLabeled
         self.basicComponent.sendMessage(
             messageType=MessageType.PLACEMENT,
             messageSubType=MessageSubType.RUN_TASK_EXECUTOR,
-            data=data,
+            data=signed_data,
             destination=actor)

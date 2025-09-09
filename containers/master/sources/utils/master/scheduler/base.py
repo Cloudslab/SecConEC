@@ -19,12 +19,27 @@ from ...types.message import MessageType
 class BaseScheduler:
 
     def __init__(
-            self, schedulerName: str, isContainerMode: bool, *args, **kwargs):
+            self,
+            schedulerName: str,
+            isContainerMode: bool,
+            *args,
+            **kwargs):
         self.isContainerMode = isContainerMode
         self.name = schedulerName
         self._waitingCountLock = Lock()
         self._waitingCount = 0
         self.scaler: Scaler = None
+
+    @staticmethod
+    def filter_actor(
+            domainName,
+            allActors):
+        actors = []
+        for actor in allActors:
+            if actor.domainName != domainName:
+                continue
+            actors.append(actor)
+        return actors
 
     def schedule(
             self,
@@ -36,34 +51,47 @@ class BaseScheduler:
             decisionsQueue: Queue[Decision],
             *args,
             **kwargs) -> bool:
-        allActors = registeredManager.actors.copyAll()
-
+        allActors = registeredManager.actors.filter_by_domain(user.domainName)
+        allActors = allActors.copy()
+        from pprint import pformat
+        basicComponent.debugLogger.debug(pformat(allActors))
         if not len(allActors):
             basicComponent.debugLogger.warning(
-                'No %s to schedule', ComponentRole.ACTOR.value)
-            self.scaler.warnUser(user)
+                'No %s to schedule in domain %s', ComponentRole.ACTOR.value, user.domainName)
+            basicComponent.sendMessage(
+                messageType=MessageType.ACKNOWLEDGEMENT,
+                messageSubType=MessageSubType.NO_ACTOR,
+                data={'domainName': user.domainName},
+                destination=user)
+            basicComponent.debugLogger.debug(
+                'Warn %s there is no %s: %s in %s',
+                ComponentRole.USER.value,
+                ComponentRole.ACTOR.value,
+                user.nameLogPrinting,
+                user.domainName)
             return False
 
-        if resources.cpu.utilization > .8:
-            schedulingCount = self.readWaitingCount()
-            if schedulingCount > 4:
-                knownMasters = registeredManager.masters.copyAll()
-                subMaster = self.getBestMaster(
-                    user=user, knownMasters=knownMasters)
-                if subMaster is None:
-                    self.scaler = self.prepareScaler(
-                        user=user,
-                        master=basicComponent.me,
-                        allActors=allActors,
-                        systemPerformance=systemPerformance,
-                        isContainerMode=self.isContainerMode)
-                    subMaster = self.scaler.scale(user=user, actors=allActors)
-                    if subMaster is None:
-                        return False
-                basicComponent.debugLogger.debug(
-                    'Forward request to another ip %s', str(subMaster.addr[0]))
-                self.scaler.notifyUser(user, subMaster)
-                return False
+        # TODO: Uncomment this
+        # if resources.cpu.utilization > .8:
+        #     schedulingCount = self.readWaitingCount()
+        #     if schedulingCount > 4:
+        #         knownMasters = registeredManager.masters.copyAll()
+        #         subMaster = self.getBestMaster(
+        #             user=user, knownMasters=knownMasters)
+        #         if subMaster is None:
+        #             self.scaler = self.prepareScaler(
+        #                 user=user,
+        #                 master=basicComponent.me,
+        #                 allActors=allActors,
+        #                 systemPerformance=systemPerformance,
+        #                 isContainerMode=self.isContainerMode)
+        #             subMaster = self.scaler.scale(user=user, actors=allActors)
+        #             if subMaster is None:
+        #                 return False
+        #         basicComponent.debugLogger.debug(
+        #             'Forward request to another ip %s', str(subMaster.addr[0]))
+        #         self.scaler.notifyUser(user, subMaster)
+        #         return False
 
         decision = self._schedule(
             user=user,
@@ -89,7 +117,9 @@ class BaseScheduler:
         return True
 
     @abstractmethod
-    def _schedule(self, *args, **kwargs) -> Decision:
+    def _schedule(self,
+                  *args,
+                  **kwargs) -> Decision:
         raise NotImplementedError
 
     def joinWaiting(self):
@@ -110,12 +140,17 @@ class BaseScheduler:
 
     @abstractmethod
     def getBestMaster(
-            self, *args, **kwargs) -> Union[Component, None]:
+            self,
+            *args,
+            **kwargs) -> Union[Component, None]:
         raise NotImplementedError
 
     @abstractmethod
-    def prepareScaler(self, *args, **kwargs) -> Scaler:
+    def prepareScaler(self,
+                      *args,
+                      **kwargs) -> Scaler:
         raise NotImplementedError
 
-    def genUserTaskToken(self, user: User):
+    def genUserTaskToken(self,
+                         user: User):
         pass

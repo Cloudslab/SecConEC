@@ -13,7 +13,7 @@ from ..types import ComponentRole
 
 
 class Communicator(BasicMessageHandler, ABC):
-    locks: DefaultDict[str, Lock] = defaultdict(lambda: Lock())
+    sender_locks: DefaultDict[str, Lock] = defaultdict(lambda: Lock())
     networkTimeDiff: Dict[Tuple[str, int], float] = {}
     isRegistered: Event = Event()
 
@@ -25,14 +25,21 @@ class Communicator(BasicMessageHandler, ABC):
             logLevel: int,
             masterAddr: Address,
             remoteLoggerAddr: Address,
-            ignoreSocketError: bool = False):
+            ignoreSocketError: bool = False,
+            enableTLS: bool = False,
+            certFile: str = '',
+            keyFile: str = '',
+            domainName: str = ''):
         BasicMessageHandler.__init__(
             self,
             role=role,
             addr=addr,
             logLevel=logLevel,
             ignoreSocketError=ignoreSocketError,
-            portRange=portRange)
+            portRange=portRange,
+            enableTLS=enableTLS,
+            certFile=certFile,
+            keyFile=keyFile)
         self.serveEvent.wait()
         self.me = Component(
             hostID=self.hostID,
@@ -44,6 +51,7 @@ class Communicator(BasicMessageHandler, ABC):
         self.remoteLogger = Component(
             role=ComponentRole.REMOTE_LOGGER,
             addr=remoteLoggerAddr)
+        self.domainName = domainName
 
     def setName(
             self,

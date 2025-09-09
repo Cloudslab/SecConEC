@@ -21,17 +21,23 @@ class BasicComponent(Communicator, ABC):
             portRange: Tuple[int, int],
             logLevel: int,
             masterAddr: Address,
-            remoteLoggerAddr: Address,
-            ignoreSocketError: bool = False):
+            ignoreSocketError: bool = False,
+            enableTLS: bool = False,
+            certFile: str = '',
+            keyFile: str = '',
+            domainName: str = ''):
         Communicator.__init__(
             self,
             role=role,
             addr=addr,
             logLevel=logLevel,
             masterAddr=masterAddr,
-            remoteLoggerAddr=remoteLoggerAddr,
             ignoreSocketError=ignoreSocketError,
-            portRange=portRange)
+            portRange=portRange,
+            enableTLS=enableTLS,
+            certFile=certFile,
+            keyFile=keyFile,
+            domainName=domainName)
         self.handleSignal()
         self.serveEvent.wait()
         self.setName(addr=self.addr)
@@ -78,7 +84,7 @@ class BasicComponent(Communicator, ABC):
             messageType=MessageType.LOG,
             messageSubType=MessageSubType.MEDIAN_RECEIVED_PACKET_SIZE,
             data=data,
-            destination=self.remoteLogger)
+            destination=self.master)
 
     def uploadDelays(self):
         allDelays = self.delays.calculateAll()
@@ -89,4 +95,4 @@ class BasicComponent(Communicator, ABC):
             messageType=MessageType.LOG,
             messageSubType=MessageSubType.DELAYS,
             data=data,
-            destination=self.remoteLogger)
+            destination=self.master)
